@@ -1,0 +1,6 @@
+{
+  "name": "Кринж & Co CRM",
+  "description": "Адаптивная CRM-система центра восстановления здорового сна «Кринж & Co» (Волгоград, 12 партнерских турбаз, ролевая модель, воронка продаж, финансы и аналитика).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

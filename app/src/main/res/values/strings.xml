@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Кринж &amp; Co CRM</string>
+    <string name="brand_subtitle">Центр здорового сна · Волгоград</string>
+    <string name="legal_disclaimer">Услуги носят информационно-консультационный и образовательно-оздоровительный характер и не являются медицинской помощью</string>
+    <string name="vk_community_url">https://vk.ru/club241842043</string>
+    <string name="reset_demo_data">Сбросить демо-данные</string>
+    <string name="cd_brand_logo">Логотип Кринж &amp; Co</string>
+    <string name="cd_open_menu">Открыть боковое меню</string>
+    <string name="cd_toggle_theme">Переключить тему оформления</string>
+    <string name="cd_toggle_font">Изменить размер шрифта</string>
+    <string name="cd_retreat_banner">Турбаза в Волгоградской области</string>
+    <string name="cd_back">Назад</string>
+</resources>
