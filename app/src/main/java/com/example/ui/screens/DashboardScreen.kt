@@ -32,14 +32,18 @@ import kotlin.math.roundToInt
 @Composable
 fun DashboardScreen(
     state: CrmDatabaseState,
+    syncInfo: SupabaseSyncInfo,
+    onSyncNow: () -> Unit,
     onNavigate: (CrmSection) -> Unit,
     onOpenClient: (String) -> Unit,
-    onSelectSpecialist: (String) -> Unit
+    onSelectSpecialist: (String) -> Unit,
+    onSelectClient: (String) -> Unit
 ) {
     val crmColors = LocalCrmColors.current
     var selectedPeriod by remember { mutableStateOf(DashboardPeriod.MONTH) }
     val role = state.settings.currentRole
     val activeSpecialist = state.specialists.find { it.id == state.settings.activeSpecialistId } ?: state.specialists.first()
+    val activeClient = state.clients.find { it.id == state.settings.activeClientId } ?: state.clients.firstOrNull()
 
     // Base monthly metrics scaled smoothly by period
     val netRevenueMonth = state.payments
@@ -120,10 +124,10 @@ fun DashboardScreen(
                     }
                     Column {
                         Text(
-                            text = if (role == UserRole.SPECIALIST) {
-                                "Кабинет: ${activeSpecialist.fullName}"
-                            } else {
-                                "Сводка центра «Кринж & Co»"
+                            text = when (role) {
+                                UserRole.SPECIALIST -> "Кабинет: ${activeSpecialist.fullName}"
+                                UserRole.CLIENT -> "Личный кабинет: ${activeClient?.fullName ?: "Клиент"}"
+                                else -> "Сводка центра «Кринж & Co»"
                             },
                             style = MaterialTheme.typography.headlineMedium,
                             color = Color.White,
@@ -132,12 +136,43 @@ fun DashboardScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Восстановление сна и преодоление реваншистской прокрастинации · 12 турбаз · Синхронизация с приложением и ВК",
+                            text = "Восстановление сна и преодоление реваншистской прокрастинации · 12 турбаз · Синхронизация Supabase",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFFE2E8F0),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
+                    }
+                }
+            }
+        }
+
+        // Live Supabase Sync Banner
+        item {
+            SupabaseSyncBanner(
+                syncInfo = syncInfo,
+                onSyncNow = onSyncNow
+            )
+        }
+
+        // Client switcher when in Client Cabinet role
+        if (role == UserRole.CLIENT && state.clients.isNotEmpty()) {
+            item {
+                CrmCard {
+                    Text(
+                        text = "Выберите профиль клиента (таблица Supabase clients):",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(state.clients) { cl ->
+                            FilterChip(
+                                selected = cl.id == activeClient?.id,
+                                onClick = { onSelectClient(cl.id) },
+                                label = { Text(cl.fullName.substringBeforeLast(" ")) }
+                            )
+                        }
                     }
                 }
             }
@@ -194,8 +229,113 @@ fun DashboardScreen(
             }
         }
 
-        // KPI Grid (2-column responsive layout)
-        if (role == UserRole.SPECIALIST) {
+        // Client Cabinet Dashboard
+        if (role == UserRole.CLIENT && activeClient != null) {
+            val clientBookings = state.bookings.filter { it.clientId == activeClient.id }
+            val activeCount = clientBookings.count { it.status == BookingStatus.CONFIRMED }
+            val recProg = state.programs.find { it.id == activeClient.recommendedProgramId }
+
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        KpiMetricCard(
+                            title = "Мои записи (Supabase)",
+                            value = "$activeCount",
+                            subtitle = "Всего в истории: ${clientBookings.size}",
+                            icon = Icons.Filled.CalendarMonth,
+                            accentColor = crmColors.info,
+                            accentContainer = crmColors.infoContainer,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onNavigate(CrmSection.CALENDAR) }
+                        )
+                        KpiMetricCard(
+                            title = "Экспресс-тест сна",
+                            value = "${activeClient.expressTestScore}/100",
+                            subtitle = recProg?.title?.take(20) ?: "Онлайн-курс",
+                            icon = Icons.Filled.Psychology,
+                            accentColor = MaterialTheme.colorScheme.primary,
+                            accentContainer = crmColors.warningContainer,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onOpenClient(activeClient.id) }
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        KpiMetricCard(
+                            title = "Дневник гигиены сна",
+                            value = "${activeClient.sleepDiary.adherencePercent}%",
+                            subtitle = "Средний сон: ${activeClient.sleepDiary.avgSleepHours} ч",
+                            icon = Icons.Filled.Bedtime,
+                            accentColor = crmColors.violet,
+                            accentContainer = crmColors.violetContainer,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onOpenClient(activeClient.id) }
+                        )
+                        KpiMetricCard(
+                            title = "Согласие 152-ФЗ",
+                            value = if (activeClient.pdnConsentSigned) "Подписано" else "Требуется",
+                            subtitle = activeClient.pdnConsentDate ?: "Откройте профиль",
+                            icon = Icons.Filled.VerifiedUser,
+                            accentColor = if (activeClient.pdnConsentSigned) crmColors.success else crmColors.danger,
+                            accentContainer = if (activeClient.pdnConsentSigned) crmColors.successContainer else crmColors.dangerContainer,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onOpenClient(activeClient.id) }
+                        )
+                    }
+                }
+            }
+
+            item {
+                CrmCard {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Мои ближайшие записи", style = MaterialTheme.typography.titleMedium)
+                        Button(onClick = { onNavigate(CrmSection.CALENDAR) }) {
+                            Icon(Icons.Filled.Add, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Записаться")
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    if (clientBookings.isEmpty()) {
+                        Text(
+                            "Пока нет активных записей. Нажмите «Записаться», чтобы создать запись напрямую в Supabase.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        clientBookings.forEach { bk ->
+                            val sp = state.specialists.find { it.id == bk.specialistId }
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("${bk.dayOfWeek}, ${bk.dateLabel} · ${bk.timeSlot}", style = MaterialTheme.typography.titleSmall)
+                                        Text(sp?.fullName ?: "Специалист центра", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    StatusPill(
+                                        text = bk.status.label,
+                                        containerColor = if (bk.status == BookingStatus.CONFIRMED) crmColors.successContainer else crmColors.dangerContainer,
+                                        contentColor = if (bk.status == BookingStatus.CONFIRMED) crmColors.success else crmColors.danger
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (role == UserRole.SPECIALIST) {
             val myClients = state.clients.filter { it.assignedSpecialistId == activeSpecialist.id }
             val myBookings = state.bookings.filter { it.specialistId == activeSpecialist.id && it.status == BookingStatus.CONFIRMED }
             val myReviews = state.reviews.filter { it.specialistId == activeSpecialist.id }

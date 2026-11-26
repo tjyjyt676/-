@@ -4,7 +4,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +28,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.CrmSection
+import com.example.data.SupabaseSyncInfo
+import com.example.data.SupabaseSyncStatus
 import com.example.data.UserRole
 import com.example.ui.theme.LocalCrmColors
 
@@ -98,7 +102,9 @@ fun RoleSwitcherStrip(
         border = BorderStroke(1.dp, crmColors.subtleBorder)
     ) {
         Row(
-            modifier = Modifier.padding(3.dp),
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -123,6 +129,75 @@ fun RoleSwitcherStrip(
                         maxLines = 1
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun SupabaseSyncBanner(
+    syncInfo: SupabaseSyncInfo,
+    onSyncNow: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val crmColors = LocalCrmColors.current
+    val (bg, fg, icon) = when (syncInfo.status) {
+        SupabaseSyncStatus.SYNCED -> Triple(crmColors.successContainer, crmColors.success, Icons.Filled.CloudDone)
+        SupabaseSyncStatus.SYNCING -> Triple(crmColors.infoContainer, crmColors.info, Icons.Filled.CloudSync)
+        SupabaseSyncStatus.MISSING_KEY -> Triple(crmColors.warningContainer, crmColors.warning, Icons.Filled.VpnKey)
+        SupabaseSyncStatus.ERROR -> Triple(crmColors.dangerContainer, crmColors.danger, Icons.Filled.CloudOff)
+        SupabaseSyncStatus.IDLE -> Triple(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.onSurfaceVariant, Icons.Filled.CloudQueue)
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = bg.copy(alpha = 0.7f),
+        border = BorderStroke(1.dp, fg.copy(alpha = 0.45f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size(18.dp))
+                Column {
+                    Text(
+                        text = when (syncInfo.status) {
+                            SupabaseSyncStatus.SYNCED -> "Supabase: clients (${syncInfo.remoteClientsCount}), bookings (${syncInfo.remoteBookingsCount})"
+                            else -> syncInfo.status.label
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = fg
+                    )
+                    val detail = syncInfo.errorMessage
+                        ?: syncInfo.lastSyncedAt?.let { "Обновлено в $it" }
+                        ?: "Таблицы clients и bookings"
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            TextButton(
+                onClick = onSyncNow,
+                enabled = syncInfo.status != SupabaseSyncStatus.SYNCING,
+                modifier = Modifier.testTag("supabase_sync_banner_btn")
+            ) {
+                Icon(Icons.Filled.Refresh, null, Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Обновить", style = MaterialTheme.typography.labelSmall)
             }
         }
     }

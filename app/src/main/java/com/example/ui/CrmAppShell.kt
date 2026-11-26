@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun KringeCrmApp(viewModel: CrmViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val syncInfo by viewModel.syncInfo.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -91,9 +92,12 @@ fun KringeCrmApp(viewModel: CrmViewModel) {
                     when (currentSection) {
                         CrmSection.DASHBOARD -> DashboardScreen(
                             state = state,
+                            syncInfo = syncInfo,
+                            onSyncNow = { viewModel.syncFromSupabase(showToast = true) },
                             onNavigate = { sec -> if (sec in allowedSections) currentSection = sec },
                             onOpenClient = { activeClient360Id = it },
-                            onSelectSpecialist = viewModel::selectActiveSpecialist
+                            onSelectSpecialist = viewModel::selectActiveSpecialist,
+                            onSelectClient = viewModel::selectActiveClient
                         )
                         CrmSection.KANBAN -> KanbanScreen(
                             state = state,
@@ -109,6 +113,7 @@ fun KringeCrmApp(viewModel: CrmViewModel) {
                         )
                         CrmSection.CALENDAR -> CalendarScreen(
                             state = state,
+                            onSyncNow = { viewModel.syncFromSupabase(showToast = true) },
                             hoursUntil = viewModel::hoursUntil,
                             onCreateBooking = viewModel::createBooking,
                             onCancelBooking = viewModel::cancelBooking,
@@ -157,6 +162,9 @@ fun KringeCrmApp(viewModel: CrmViewModel) {
                         )
                         CrmSection.AUDIT -> AuditSettingsScreen(
                             state = state,
+                            syncInfo = syncInfo,
+                            onSyncNow = { viewModel.syncFromSupabase(showToast = true) },
+                            onSeedDemoToSupabase = viewModel::seedDemoToSupabase,
                             onToggleTheme = viewModel::toggleDarkTheme,
                             onToggleFont = viewModel::toggleLargeFont,
                             onResetDemoData = viewModel::resetDemoData
@@ -189,10 +197,12 @@ fun KringeCrmApp(viewModel: CrmViewModel) {
                             CrmTopHeader(
                                 isExpanded = true,
                                 currentRole = state.settings.currentRole,
+                                syncStatus = syncInfo.status,
                                 darkTheme = state.settings.darkTheme,
                                 largeFont = state.settings.largeFont,
                                 onOpenMenu = {},
                                 onSelectRole = viewModel::switchRole,
+                                onSyncNow = { viewModel.syncFromSupabase(showToast = true) },
                                 onToggleTheme = viewModel::toggleDarkTheme,
                                 onToggleFont = viewModel::toggleLargeFont
                             )
@@ -245,10 +255,12 @@ fun KringeCrmApp(viewModel: CrmViewModel) {
                             CrmTopHeader(
                                 isExpanded = false,
                                 currentRole = state.settings.currentRole,
+                                syncStatus = syncInfo.status,
                                 darkTheme = state.settings.darkTheme,
                                 largeFont = state.settings.largeFont,
                                 onOpenMenu = { scope.launch { drawerState.open() } },
                                 onSelectRole = viewModel::switchRole,
+                                onSyncNow = { viewModel.syncFromSupabase(showToast = true) },
                                 onToggleTheme = viewModel::toggleDarkTheme,
                                 onToggleFont = viewModel::toggleLargeFont
                             )
@@ -315,14 +327,23 @@ fun KringeCrmApp(viewModel: CrmViewModel) {
 private fun CrmTopHeader(
     isExpanded: Boolean,
     currentRole: UserRole,
+    syncStatus: SupabaseSyncStatus,
     darkTheme: Boolean,
     largeFont: Boolean,
     onOpenMenu: () -> Unit,
     onSelectRole: (UserRole) -> Unit,
+    onSyncNow: () -> Unit,
     onToggleTheme: () -> Unit,
     onToggleFont: () -> Unit
 ) {
     val crmColors = LocalCrmColors.current
+    val syncTint = when (syncStatus) {
+        SupabaseSyncStatus.SYNCED -> crmColors.success
+        SupabaseSyncStatus.SYNCING -> crmColors.info
+        SupabaseSyncStatus.MISSING_KEY -> crmColors.warning
+        SupabaseSyncStatus.ERROR -> crmColors.danger
+        SupabaseSyncStatus.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Surface(
         color = crmColors.deepHeader,
         tonalElevation = 0.dp
@@ -360,6 +381,20 @@ private fun CrmTopHeader(
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onSyncNow,
+                        modifier = Modifier.testTag("header_sync_supabase_btn")
+                    ) {
+                        Icon(
+                            imageVector = when (syncStatus) {
+                                SupabaseSyncStatus.SYNCED -> Icons.Filled.CloudDone
+                                SupabaseSyncStatus.ERROR -> Icons.Filled.CloudOff
+                                else -> Icons.Filled.CloudSync
+                            },
+                            contentDescription = "Синхронизация с Supabase",
+                            tint = syncTint
+                        )
+                    }
                     IconButton(
                         onClick = onToggleFont,
                         modifier = Modifier.testTag("toggle_font_btn")

@@ -22,6 +22,7 @@ import com.example.ui.theme.LocalCrmColors
 @Composable
 fun CalendarScreen(
     state: CrmDatabaseState,
+    onSyncNow: () -> Unit,
     hoursUntil: (Booking) -> Double,
     onCreateBooking: (
         clientId: String,
@@ -39,21 +40,36 @@ fun CalendarScreen(
 ) {
     val crmColors = LocalCrmColors.current
     val isSpecialist = state.settings.currentRole == UserRole.SPECIALIST
+    val isClient = state.settings.currentRole == UserRole.CLIENT
     var viewMode by remember { mutableStateOf("Неделя") } // "День" / "Неделя"
-    var selectedDay by remember { mutableStateOf("20.11.2026") }
+    var selectedDay by remember { mutableStateOf("28.11.2026") }
     var specialistFilter by remember { mutableStateOf<String?>(null) }
     var programFilter by remember { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var cancelTarget by remember { mutableStateOf<Booking?>(null) }
 
     val availableDays = remember(state.bookings) {
-        (listOf("20.11.2026", "21.11.2026", "22.11.2026", "23.11.2026", "24.11.2026") +
+        (listOf("27.11.2026", "28.11.2026", "29.11.2026", "30.11.2026", "01.12.2026") +
             state.bookings.map { it.dateLabel }).distinct()
     }
 
-    val visibleBookings = remember(state.bookings, isSpecialist, state.settings.activeSpecialistId, viewMode, selectedDay, specialistFilter, programFilter) {
+    val visibleBookings = remember(
+        state.bookings,
+        isSpecialist,
+        isClient,
+        state.settings.activeSpecialistId,
+        state.settings.activeClientId,
+        viewMode,
+        selectedDay,
+        specialistFilter,
+        programFilter
+    ) {
         state.bookings.filter { bk ->
-            val roleOk = !isSpecialist || bk.specialistId == state.settings.activeSpecialistId
+            val roleOk = when {
+                isSpecialist -> bk.specialistId == state.settings.activeSpecialistId
+                isClient -> bk.clientId == state.settings.activeClientId
+                else -> true
+            }
             val dayOk = viewMode == "Неделя" || bk.dateLabel == selectedDay
             val spOk = specialistFilter == null || bk.specialistId == specialistFilter
             val prOk = programFilter == null || bk.programId == programFilter
@@ -70,16 +86,28 @@ fun CalendarScreen(
     ) {
         item {
             SectionTitleBar(
-                title = if (isSpecialist) "Мой календарь сессий" else "Единый календарь записей",
-                subtitle = "Правило 24 часов на бронь и бесплатную отмену · Защита от накладок",
+                title = when {
+                    isSpecialist -> "Мой календарь сессий"
+                    isClient -> "Мои записи на сессии"
+                    else -> "Единый календарь записей"
+                },
+                subtitle = "Синхронизация с таблицей Supabase bookings · Правило 24 часов",
                 trailing = {
-                    Button(
-                        onClick = { showCreateDialog = true },
-                        modifier = Modifier.testTag("new_booking_button")
-                    ) {
-                        Icon(Icons.Filled.EventAvailable, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Запись")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = onSyncNow,
+                            modifier = Modifier.testTag("calendar_sync_btn")
+                        ) {
+                            Icon(Icons.Filled.CloudSync, contentDescription = "Обновить из Supabase")
+                        }
+                        Button(
+                            onClick = { showCreateDialog = true },
+                            modifier = Modifier.testTag("new_booking_button")
+                        ) {
+                            Icon(Icons.Filled.EventAvailable, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Запись")
+                        }
                     }
                 }
             )
@@ -349,15 +377,20 @@ private fun NewBookingDialog(
     onDismiss: () -> Unit,
     onConfirm: (String, String, String, String?, String, String, String, Int, String) -> Unit
 ) {
-    var clientId by remember { mutableStateOf(state.clients.firstOrNull()?.id ?: "") }
+    val defaultClientId = if (state.settings.currentRole == UserRole.CLIENT) {
+        state.settings.activeClientId
+    } else {
+        state.clients.firstOrNull()?.id ?: ""
+    }
+    var clientId by remember { mutableStateOf(defaultClientId) }
     var specialistId by remember { mutableStateOf(state.specialists.firstOrNull()?.id ?: "") }
     var programId by remember { mutableStateOf(state.programs.firstOrNull()?.id ?: "") }
     val dayOptions = listOf(
-        Triple("20.11.2026", "Пт", 12),  // < 24h to demonstrate rule check!
-        Triple("21.11.2026", "Сб", 42),
-        Triple("22.11.2026", "Вс", 66),
-        Triple("23.11.2026", "Пн", 90),
-        Triple("24.11.2026", "Вт", 114)
+        Triple("27.11.2026", "Пт", 12),  // < 24h to demonstrate rule check!
+        Triple("28.11.2026", "Сб", 42),
+        Triple("29.11.2026", "Вс", 66),
+        Triple("30.11.2026", "Пн", 90),
+        Triple("01.12.2026", "Вт", 114)
     )
     var selectedDayIdx by remember { mutableIntStateOf(1) }
     val slots = listOf("10:00", "11:00", "14:00", "16:00", "18:00")

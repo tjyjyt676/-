@@ -25,26 +25,39 @@ data class CrmFeedback(
 
 class CrmViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = CrmRepository(application.applicationContext)
+    private val repository = CrmRepository()
 
     private val _state = MutableStateFlow(DemoDataSeeder.createInitialState())
     val state: StateFlow<CrmDatabaseState> = _state.asStateFlow()
+
+    private val _syncInfo = MutableStateFlow(
+        if (repository.isConfigured()) {
+            SupabaseSyncInfo(status = SupabaseSyncStatus.IDLE)
+        } else {
+            SupabaseSyncInfo(
+                status = SupabaseSyncStatus.MISSING_KEY,
+                errorMessage = "Укажите SUPABASE_ANON_KEY в панели Secrets в AI Studio для живой синхронизации."
+            )
+        }
+    )
+    val syncInfo: StateFlow<SupabaseSyncInfo> = _syncInfo.asStateFlow()
 
     private val _feedback = MutableSharedFlow<CrmFeedback>(extraBufferCapacity = 8)
     val feedback: SharedFlow<CrmFeedback> = _feedback.asSharedFlow()
 
     private val dateTimeFmt = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.forLanguageTag("ru"))
     private val dateFmt = SimpleDateFormat("dd.MM.yyyy", Locale.forLanguageTag("ru"))
+    private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.forLanguageTag("ru"))
 
     init {
-        viewModelScope.launch {
-            _state.value = repository.loadState()
-        }
+        syncFromSupabase(showToast = false)
     }
 
     private fun nowDateTime(): String = dateTimeFmt.format(Date())
     private fun nowDate(): String = dateFmt.format(Date())
+    private fun nowTime(): String = timeFmt.format(Date())
     private fun newId(prefix: String): String = "${prefix}_${UUID.randomUUID().toString().take(6)}"
+    private fun newUuid(): String = UUID.randomUUID().toString()
 
     private fun updateState(
         auditAction: String? = null,
@@ -58,6 +71,7 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
                 UserRole.ADMIN -> "Руководитель центра"
                 UserRole.MANAGER -> "Менеджер продаж"
                 UserRole.SPECIALIST -> next.specialists.find { it.id == next.settings.activeSpecialistId }?.fullName ?: "Специалист"
+                UserRole.CLIENT -> next.clients.find { it.id == next.settings.activeClientId }?.fullName ?: "Клиент"
             }
             val entry = AuditLogEntry(
                 id = newId("al"),
@@ -70,11 +84,101 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
             next = next.copy(auditLog = listOf(entry) + next.auditLog)
         }
         _state.value = next
-        viewModelScope.launch { repository.saveState(next) }
     }
 
     private fun emitFeedback(message: String, tone: BannerTone = BannerTone.INFO) {
         _feedback.tryEmit(CrmFeedback(message, tone))
+    }
+
+    // --- Supabase Sync (clients & bookings) ---
+
+    fun syncFromSupabase(showToast: Boolean = true) {
+        if (!repository.isConfigured()) {
+            _syncInfo.value = SupabaseSyncInfo(
+                status = SupabaseSyncStatus.MISSING_KEY,
+                errorMessage = "Укажите SUPABASE_ANON_KEY в панели Secrets в AI Studio."
+            )
+            if (showToast) {
+                emitFeedback("Задайте SUPABASE_ANON_KEY в Secrets в AI Studio для синхронизации", BannerTone.WARNING)
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.SYNCING, errorMessage = null)
+            repository.fetchClientsAndBookings()
+                .onSuccess { (remoteClients, remoteBookings) ->
+                    updateState { s ->
+                        val nextClients = if (remoteClients.isNotEmpty()) remoteClients else s.clients
+                        val nextActiveClientId = if (nextClients.any { it.id == s.settings.activeClientId }) {
+                            s.settings.activeClientId
+                        } else {
+                            nextClients.firstOrNull()?.id ?: s.settings.activeClientId
+                        }
+                        s.copy(
+                            clients = nextClients,
+                            bookings = remoteBookings,
+                            settings = s.settings.copy(activeClientId = nextActiveClientId)
+                        )
+                    }
+                    _syncInfo.value = SupabaseSyncInfo(
+                        status = SupabaseSyncStatus.SYNCED,
+                        lastSyncedAt = nowTime(),
+                        errorMessage = null,
+                        remoteClientsCount = remoteClients.size,
+                        remoteBookingsCount = remoteBookings.size
+                    )
+                    if (showToast) {
+                        emitFeedback(
+                            "Синхронизировано с Supabase: clients (${remoteClients.size}), bookings (${remoteBookings.size})",
+                            BannerTone.SUCCESS
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    val msg = err.message ?: "Не удалось подключиться к Supabase"
+                    _syncInfo.value = _syncInfo.value.copy(
+                        status = SupabaseSyncStatus.ERROR,
+                        errorMessage = msg
+                    )
+                    if (showToast) {
+                        emitFeedback(msg, BannerTone.ERROR)
+                    }
+                }
+        }
+    }
+
+    fun seedDemoToSupabase() {
+        val fresh = DemoDataSeeder.createInitialState()
+        val demoClientsWithUuid = fresh.clients.mapIndexed { idx, cl ->
+            cl.copy(id = "00000000-0000-4000-8000-${(idx + 1).toString().padStart(12, '0')}")
+        }
+        val idMap = fresh.clients.mapIndexed { idx, cl -> cl.id to demoClientsWithUuid[idx].id }.toMap()
+        val demoBookingsWithUuid = fresh.bookings.mapIndexed { idx, bk ->
+            bk.copy(
+                id = "10000000-0000-4000-8000-${(idx + 1).toString().padStart(12, '0')}",
+                clientId = idMap[bk.clientId] ?: bk.clientId
+            )
+        }
+
+        if (!repository.isConfigured()) {
+            emitFeedback("Задайте SUPABASE_ANON_KEY в Secrets, чтобы выгрузить демо в Supabase", BannerTone.WARNING)
+            return
+        }
+
+        viewModelScope.launch {
+            _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.SYNCING, errorMessage = null)
+            repository.seedDemoToSupabase(demoClientsWithUuid, demoBookingsWithUuid)
+                .onSuccess { (cCount, bCount) ->
+                    syncFromSupabase(showToast = false)
+                    emitFeedback("В Supabase загружены демо-данные: clients ($cCount), bookings ($bCount)", BannerTone.SUCCESS)
+                }
+                .onFailure { err ->
+                    val msg = err.message ?: "Ошибка выгрузки в Supabase"
+                    _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.ERROR, errorMessage = msg)
+                    emitFeedback(msg, BannerTone.ERROR)
+                }
+        }
     }
 
     // --- UI & Role Settings ---
@@ -82,12 +186,21 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
     fun switchRole(role: UserRole) {
         updateState { it.copy(settings = it.settings.copy(currentRole = role)) }
         emitFeedback("Режим роли: ${role.title} (${role.subtitle})", BannerTone.INFO)
+        if (repository.isConfigured()) {
+            syncFromSupabase(showToast = false)
+        }
     }
 
     fun selectActiveSpecialist(specialistId: String) {
         val sp = _state.value.specialists.find { it.id == specialistId } ?: return
         updateState { it.copy(settings = it.settings.copy(activeSpecialistId = specialistId)) }
         emitFeedback("Активный специалист: ${sp.fullName}", BannerTone.INFO)
+    }
+
+    fun selectActiveClient(clientId: String) {
+        val cl = _state.value.clients.find { it.id == clientId } ?: return
+        updateState { it.copy(settings = it.settings.copy(activeClientId = clientId)) }
+        emitFeedback("Кабинет клиента: ${cl.fullName}", BannerTone.INFO)
     }
 
     fun toggleDarkTheme() {
@@ -104,10 +217,19 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetDemoData() {
-        viewModelScope.launch {
-            val fresh = repository.resetDemoData(preserveTheme = true, currentSettings = _state.value.settings)
-            _state.value = fresh
-            emitFeedback("Демо-данные «Кринж & Co» восстановлены", BannerTone.SUCCESS)
+        val currentSettings = _state.value.settings
+        val fresh = DemoDataSeeder.createInitialState()
+        _state.value = fresh.copy(
+            settings = fresh.settings.copy(
+                darkTheme = currentSettings.darkTheme,
+                largeFont = currentSettings.largeFont,
+                currentRole = currentSettings.currentRole
+            )
+        )
+        if (repository.isConfigured()) {
+            syncFromSupabase(showToast = true)
+        } else {
+            emitFeedback("Демо-состояние обновлено (ожидает SUPABASE_ANON_KEY)", BannerTone.INFO)
         }
     }
 
@@ -228,7 +350,7 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
         emitFeedback("Турбаза ${targetBase.name} прикреплена к сделке", BannerTone.SUCCESS)
     }
 
-    // --- Clients 360° ---
+    // --- Clients 360° (Supabase `clients` table) ---
 
     fun togglePdnConsent(clientId: String, signed: Boolean) {
         val client = _state.value.clients.find { it.id == clientId } ?: return
@@ -243,10 +365,25 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
         }
-        emitFeedback(
-            if (signed) "Согласие 152-ФЗ подтверждено (${dateStr})" else "Согласие 152-ФЗ снято",
-            if (signed) BannerTone.SUCCESS else BannerTone.WARNING
-        )
+        if (repository.isConfigured()) {
+            viewModelScope.launch {
+                repository.updateClientPdn(clientId, signed, dateStr)
+                    .onSuccess {
+                        emitFeedback(
+                            if (signed) "Согласие 152-ФЗ сохранено в Supabase ($dateStr)" else "Согласие 152-ФЗ снято в Supabase",
+                            BannerTone.SUCCESS
+                        )
+                    }
+                    .onFailure { err ->
+                        emitFeedback(err.message ?: "Ошибка обновления 152-ФЗ в Supabase", BannerTone.ERROR)
+                    }
+            }
+        } else {
+            emitFeedback(
+                if (signed) "Согласие 152-ФЗ обновлено локально (задайте SUPABASE_ANON_KEY)" else "Согласие 152-ФЗ снято",
+                BannerTone.WARNING
+            )
+        }
     }
 
     fun addSpecialistNote(clientId: String, text: String) {
@@ -261,17 +398,26 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
             date = nowDate(),
             text = text.trim()
         )
+        val updatedNotes = listOf(note) + client.specialistNotes
         updateState(
             auditAction = "Заметка специалиста",
             auditDetails = "${client.fullName}: ${text.trim().take(60)}"
         ) { s ->
             s.copy(
                 clients = s.clients.map {
-                    if (it.id == clientId) it.copy(specialistNotes = listOf(note) + it.specialistNotes) else it
+                    if (it.id == clientId) it.copy(specialistNotes = updatedNotes) else it
                 }
             )
         }
-        emitFeedback("Внутренняя заметка сохранена", BannerTone.SUCCESS)
+        if (repository.isConfigured()) {
+            viewModelScope.launch {
+                repository.updateClientNotes(clientId, updatedNotes)
+                    .onSuccess { emitFeedback("Заметка сохранена в Supabase (clients)", BannerTone.SUCCESS) }
+                    .onFailure { err -> emitFeedback(err.message ?: "Ошибка сохранения заметки в Supabase", BannerTone.ERROR) }
+            }
+        } else {
+            emitFeedback("Заметка добавлена (задайте SUPABASE_ANON_KEY для облака)", BannerTone.WARNING)
+        }
     }
 
     fun addClient(
@@ -294,7 +440,7 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
             else -> "prog_online"
         }
         val client = Client(
-            id = newId("cl"),
+            id = newUuid(),
             fullName = fullName.trim(),
             phone = phone.trim(),
             age = age,
@@ -309,16 +455,40 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
             specialistNotes = emptyList(),
             createdAt = nowDate()
         )
-        updateState(
-            auditAction = "Добавлен клиент",
-            auditDetails = "${client.fullName} (${segment.shortLabel}, тест ${client.expressTestScore})"
-        ) { s ->
-            s.copy(clients = listOf(client) + s.clients)
+
+        if (!repository.isConfigured()) {
+            updateState(
+                auditAction = "Добавлен клиент",
+                auditDetails = "${client.fullName} (${segment.shortLabel}, тест ${client.expressTestScore})"
+            ) { s -> s.copy(clients = listOf(client) + s.clients) }
+            emitFeedback("Клиент добавлен локально. Укажите SUPABASE_ANON_KEY в Secrets для записи в Supabase.", BannerTone.WARNING)
+            return
         }
-        emitFeedback("Клиент ${client.fullName} добавлен в базу", BannerTone.SUCCESS)
+
+        viewModelScope.launch {
+            _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.SYNCING, errorMessage = null)
+            repository.insertClient(client)
+                .onSuccess { saved ->
+                    updateState(
+                        auditAction = "Клиент сохранён в Supabase",
+                        auditDetails = "${saved.fullName} (clients · ${segment.shortLabel})"
+                    ) { s -> s.copy(clients = listOf(saved) + s.clients.filterNot { it.id == saved.id }) }
+                    _syncInfo.value = _syncInfo.value.copy(
+                        status = SupabaseSyncStatus.SYNCED,
+                        lastSyncedAt = nowTime(),
+                        remoteClientsCount = _state.value.clients.size
+                    )
+                    emitFeedback("Клиент «${saved.fullName}» сохранён в таблицу Supabase clients!", BannerTone.SUCCESS)
+                }
+                .onFailure { err ->
+                    val msg = err.message ?: "Ошибка записи клиента в Supabase"
+                    _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.ERROR, errorMessage = msg)
+                    emitFeedback(msg, BannerTone.ERROR)
+                }
+        }
     }
 
-    // --- Calendar & 24-Hour Business Rule + Conflict Guard ---
+    // --- Calendar & 24-Hour Business Rule + Conflict Guard (Supabase `bookings` table) ---
 
     fun hoursUntil(booking: Booking): Double {
         return (booking.scheduledEpochMillis - System.currentTimeMillis()) / 3_600_000.0
@@ -356,7 +526,7 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
 
         val clientName = current.clients.find { it.id == clientId }?.fullName ?: clientId
         val booking = Booking(
-            id = newId("bk"),
+            id = newUuid(),
             clientId = clientId,
             specialistId = specialistId,
             programId = programId,
@@ -370,13 +540,42 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
             isPaid = current.deals.any { it.clientId == clientId && (it.stage == DealStage.PAID_BOOKED || it.stage == DealStage.IN_PROGRESS) },
             notes = notes.ifBlank { "Сессия восстановления сна" }
         )
-        updateState(
-            auditAction = "Создана запись в календаре",
-            auditDetails = "$clientName · $dateLabel $timeSlot"
-        ) { s ->
-            s.copy(bookings = (s.bookings + booking).sortedBy { it.scheduledEpochMillis })
+
+        if (!repository.isConfigured()) {
+            updateState(
+                auditAction = "Создана запись в календаре",
+                auditDetails = "$clientName · $dateLabel $timeSlot"
+            ) { s -> s.copy(bookings = (s.bookings + booking).sortedBy { it.scheduledEpochMillis }) }
+            emitFeedback("Запись добавлена в память. Укажите SUPABASE_ANON_KEY в Secrets для сохранения в Supabase.", BannerTone.WARNING)
+            return null
         }
-        emitFeedback("Запись на $dateLabel $timeSlot синхронизирована с календарём", BannerTone.SUCCESS)
+
+        viewModelScope.launch {
+            _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.SYNCING, errorMessage = null)
+            repository.insertBooking(booking)
+                .onSuccess { saved ->
+                    updateState(
+                        auditAction = "Запись сохранена в Supabase",
+                        auditDetails = "$clientName · $dateLabel $timeSlot (bookings)"
+                    ) { s ->
+                        s.copy(
+                            bookings = (s.bookings.filterNot { it.id == saved.id } + saved)
+                                .sortedBy { it.scheduledEpochMillis }
+                        )
+                    }
+                    _syncInfo.value = _syncInfo.value.copy(
+                        status = SupabaseSyncStatus.SYNCED,
+                        lastSyncedAt = nowTime(),
+                        remoteBookingsCount = _state.value.bookings.size
+                    )
+                    emitFeedback("Запись на $dateLabel $timeSlot сразу сохранена в Supabase (bookings)!", BannerTone.SUCCESS)
+                }
+                .onFailure { err ->
+                    val msg = err.message ?: "Ошибка записи в таблицу bookings в Supabase"
+                    _syncInfo.value = _syncInfo.value.copy(status = SupabaseSyncStatus.ERROR, errorMessage = msg)
+                    emitFeedback(msg, BannerTone.ERROR)
+                }
+        }
         return null
     }
 
@@ -431,7 +630,20 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
                 deals = updatedDeals
             )
         }
-        emitFeedback("Запись отменена ($resolutionLabel). Слот специалиста и место на турбазе освобождены.", BannerTone.SUCCESS)
+
+        if (repository.isConfigured()) {
+            viewModelScope.launch {
+                repository.updateBookingStatus(bookingId, BookingStatus.CANCELLED)
+                    .onSuccess {
+                        emitFeedback("Отмена синхронизирована с Supabase ($resolutionLabel). Слот освобождён.", BannerTone.SUCCESS)
+                    }
+                    .onFailure { err ->
+                        emitFeedback(err.message ?: "Ошибка обновления статуса в Supabase", BannerTone.ERROR)
+                    }
+            }
+        } else {
+            emitFeedback("Запись отменена ($resolutionLabel). Слот освобождён.", BannerTone.SUCCESS)
+        }
         return true
     }
 
@@ -478,6 +690,9 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
         val payment = current.payments.find { it.id == paymentId } ?: return
         val clientName = current.clients.find { it.id == payment.clientId }?.fullName ?: payment.clientId
         val deal = current.deals.find { it.id == payment.dealId }
+        val affectedBookingIds = current.bookings
+            .filter { it.dealId == payment.dealId && it.status == BookingStatus.CONFIRMED }
+            .map { it.id }
 
         updateState(
             auditAction = if (toDeposit) "Перенос оплаты на депозит" else "Оформлен возврат средств",
@@ -504,6 +719,11 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
             } else s.tourbases
 
             s.copy(payments = nextPayments, deals = nextDeals, bookings = nextBookings, tourbases = nextBases)
+        }
+        if (repository.isConfigured() && affectedBookingIds.isNotEmpty()) {
+            viewModelScope.launch {
+                affectedBookingIds.forEach { bkId -> repository.updateBookingStatus(bkId, BookingStatus.CANCELLED) }
+            }
         }
         emitFeedback(
             if (toDeposit) "Сумма перенесена на депозит клиента, слот освобождён"
@@ -779,7 +999,7 @@ class CrmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun buildClientsCsv(): String {
         val s = _state.value
-        val sb = StringBuilder("\uFEFF") // UTF-8 BOM for Excel Cyrillic
+        val sb = StringBuilder("\uFEFF")
         sb.appendLine("ID;ФИО;Телефон;Возраст;Сегмент;Источник;Согласие 152-ФЗ;Дата ПДн;Балл теста;Гигиена сна %;Специалист")
         s.clients.forEach { cl ->
             val spName = s.specialists.find { it.id == cl.assignedSpecialistId }?.fullName ?: ""

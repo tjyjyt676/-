@@ -272,6 +272,9 @@ private fun SimpleBarChart(
 @Composable
 fun AuditSettingsScreen(
     state: CrmDatabaseState,
+    syncInfo: SupabaseSyncInfo,
+    onSyncNow: () -> Unit,
+    onSeedDemoToSupabase: () -> Unit,
     onToggleTheme: () -> Unit,
     onToggleFont: () -> Unit,
     onResetDemoData: () -> Unit
@@ -288,15 +291,41 @@ fun AuditSettingsScreen(
     ) {
         item {
             SectionTitleBar(
-                title = "Аудит, права и настройки",
-                subtitle = "Журнал действий сотрудников, матрица ролей и сброс локальных демо-данных"
+                title = "Аудит, права и Supabase",
+                subtitle = "Синхронизация таблиц clients и bookings, матрица ролей и журнал действий"
             )
+        }
+
+        // Supabase Integration Status & Controls
+        item {
+            CrmCard(borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)) {
+                Text("Подключение к Supabase REST API", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = SUPABASE_REST_URL,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = crmColors.info
+                )
+                Spacer(Modifier.height(8.dp))
+                SupabaseSyncBanner(syncInfo = syncInfo, onSyncNow = onSyncNow)
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = onSeedDemoToSupabase,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("seed_demo_supabase_btn")
+                ) {
+                    Icon(Icons.Filled.CloudUpload, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Загрузить демо-данные в Supabase (clients + bookings)")
+                }
+            }
         }
 
         // Interface Comfort & Demo Reset Card
         item {
             CrmCard {
-                Text("Комфорт интерфейса и локальные данные", style = MaterialTheme.typography.titleMedium)
+                Text("Комфорт интерфейса", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -324,7 +353,7 @@ fun AuditSettingsScreen(
                 ) {
                     Icon(Icons.Filled.RestartAlt, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Сбросить демо-данные")
+                    Text("Обновить состояние и перечитать Supabase")
                 }
             }
         }
@@ -334,11 +363,13 @@ fun AuditSettingsScreen(
             CrmCard {
                 Text("Настройки прав ролевой модели", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("• Администратор / Руководитель: полный доступ (финансы, аналитика, курсы, 12 турбаз, пуши, ВК-эфиры, модерация отзывов, аудит).", style = MaterialTheme.typography.bodySmall)
+                Text("• Администратор / Руководитель: полный доступ ко всем разделам и таблицам Supabase.", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(4.dp))
                 Text("• Менеджер по продажам: сводка, воронка Канбан, база клиентов 360°, календарь, турбазы, каталог, финансы/рассрочка 0%, единый чат.", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(4.dp))
-                Text("• Специалист: персональная сводка, личный календарь, только закреплённые клиенты (тест, дневник сна, заметки), отзывы по своим занятиям.", style = MaterialTheme.typography.bodySmall)
+                Text("• Специалист: персональная сводка, личный календарь (bookings), закреплённые клиенты (clients), заметки и отзывы.", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(4.dp))
+                Text("• Клиент (Личный кабинет): профиль, дневник сна, самостоятельная запись и просмотр своих сессий из Supabase bookings.", style = MaterialTheme.typography.bodySmall)
             }
         }
 

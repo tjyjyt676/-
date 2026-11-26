@@ -3,7 +3,8 @@ package com.example.data
 enum class UserRole(val title: String, val subtitle: String, val shortLabel: String) {
     ADMIN("Администратор", "Руководитель центра", "Админ"),
     MANAGER("Менеджер", "Отдел продаж", "Менеджер"),
-    SPECIALIST("Специалист", "Ведущий сессий", "Специалист")
+    SPECIALIST("Специалист", "Ведущий сессий", "Специалист"),
+    CLIENT("Клиент", "Личный кабинет", "Клиент")
 }
 
 enum class CrmSection(
@@ -12,19 +13,19 @@ enum class CrmSection(
     val shortTitle: String,
     val allowedRoles: Set<UserRole>
 ) {
-    DASHBOARD("dashboard", "Сводка", "Сводка", setOf(UserRole.ADMIN, UserRole.MANAGER, UserRole.SPECIALIST)),
+    DASHBOARD("dashboard", "Сводка", "Сводка", setOf(UserRole.ADMIN, UserRole.MANAGER, UserRole.SPECIALIST, UserRole.CLIENT)),
     KANBAN("kanban", "Воронка продаж", "Воронка", setOf(UserRole.ADMIN, UserRole.MANAGER)),
     CLIENTS("clients", "Клиенты 360°", "Клиенты", setOf(UserRole.ADMIN, UserRole.MANAGER, UserRole.SPECIALIST)),
-    CALENDAR("calendar", "Календарь", "Календарь", setOf(UserRole.ADMIN, UserRole.MANAGER, UserRole.SPECIALIST)),
+    CALENDAR("calendar", "Календарь", "Календарь", setOf(UserRole.ADMIN, UserRole.MANAGER, UserRole.SPECIALIST, UserRole.CLIENT)),
     TOURBASES("tourbases", "12 турбаз", "Турбазы", setOf(UserRole.ADMIN, UserRole.MANAGER)),
-    CATALOG("catalog", "Программы и ВК", "Каталог", setOf(UserRole.ADMIN, UserRole.MANAGER)),
+    CATALOG("catalog", "Программы и ВК", "Каталог", setOf(UserRole.ADMIN, UserRole.MANAGER, UserRole.CLIENT)),
     FINANCE("finance", "Финансы и 0%", "Финансы", setOf(UserRole.ADMIN, UserRole.MANAGER)),
     TEAM("team", "Специалисты", "Команда", setOf(UserRole.ADMIN, UserRole.MANAGER)),
     CHAT("chat", "Чат поддержки", "Чат", setOf(UserRole.ADMIN, UserRole.MANAGER)),
     PUSH_VK("push_vk", "Пуши и ВК-эфиры", "Пуши/ВК", setOf(UserRole.ADMIN)),
-    REVIEWS("reviews", "Отзывы и CSI", "Отзывы", setOf(UserRole.ADMIN, UserRole.SPECIALIST)),
+    REVIEWS("reviews", "Отзывы и CSI", "Отзывы", setOf(UserRole.ADMIN, UserRole.SPECIALIST, UserRole.CLIENT)),
     ANALYTICS("analytics", "Аналитика и CSV", "Аналитика", setOf(UserRole.ADMIN)),
-    AUDIT("audit", "Аудит и права", "Аудит", setOf(UserRole.ADMIN))
+    AUDIT("audit", "Аудит и Supabase", "Аудит", setOf(UserRole.ADMIN))
 }
 
 enum class DashboardPeriod(val label: String, val multiplier: Double) {
@@ -315,11 +316,28 @@ data class AuditLogEntry(
     val details: String
 )
 
+enum class SupabaseSyncStatus(val label: String) {
+    IDLE("Ожидание"),
+    SYNCING("Синхронизация..."),
+    SYNCED("Supabase подключён"),
+    MISSING_KEY("Нужен SUPABASE_ANON_KEY"),
+    ERROR("Ошибка Supabase")
+}
+
+data class SupabaseSyncInfo(
+    val status: SupabaseSyncStatus = SupabaseSyncStatus.IDLE,
+    val lastSyncedAt: String? = null,
+    val errorMessage: String? = null,
+    val remoteClientsCount: Int = 0,
+    val remoteBookingsCount: Int = 0
+)
+
 data class CrmUiSettings(
     val darkTheme: Boolean = true,
     val largeFont: Boolean = false,
     val currentRole: UserRole = UserRole.ADMIN,
-    val activeSpecialistId: String = "sp_1"
+    val activeSpecialistId: String = "sp_1",
+    val activeClientId: String = "cl_1"
 )
 
 data class CrmDatabaseState(
